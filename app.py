@@ -1,20 +1,17 @@
-
 import io
-import math
 import re
-import unicodedata
 import zipfile
+import unicodedata
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Medios Magnéticos Nómina JMC",
-    page_icon="🧾",
+    page_title="Unificador, comparativo y generador de medios magnéticos",
     layout="wide",
 )
 
@@ -23,31 +20,24 @@ st.markdown(
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 1.5rem;}
     .hero {
-        background: linear-gradient(135deg, #fff4eb 0%, #fffaf6 100%);
-        border: 1px solid #f3c9a5;
-        border-radius: 16px;
-        padding: 18px 20px;
-        margin-bottom: 16px;
+        background: linear-gradient(135deg,#fff4eb 0%,#fffaf6 100%);
+        border:1px solid #f3c9a5;
+        border-radius:16px;
+        padding:18px 20px;
+        margin-bottom:16px;
     }
-    .hero h1 {margin: 0; color: #a85400; font-size: 1.55rem;}
-    .hero p {margin: 8px 0 0 0; color: #714221;}
+    .hero h1 {margin:0; color:#a85400; font-size:1.5rem;}
+    .hero p {margin:8px 0 0 0; color:#714221;}
     .credit {
-        margin-top: 8px;
-        display: inline-block;
-        background: #fff0e1;
-        color: #a85400;
-        border: 1px solid #f3c9a5;
-        border-radius: 999px;
-        padding: 4px 10px;
-        font-size: .9rem;
-        font-weight: 600;
-    }
-    .card {
-        background: #fffaf6;
-        border: 1px solid #f0d6bf;
-        border-radius: 14px;
-        padding: 14px 16px;
-        margin-bottom: 12px;
+        margin-top:8px;
+        display:inline-block;
+        background:#fff0e1;
+        color:#a85400;
+        border:1px solid #f3c9a5;
+        border-radius:999px;
+        padding:4px 10px;
+        font-size:.9rem;
+        font-weight:600;
     }
     .footer-credit {
         text-align:center;
@@ -59,6 +49,10 @@ st.markdown(
         background:#fffaf6;
         margin-top:18px;
     }
+    .soft-note {
+        color:#8c5a2b;
+        font-size:.92rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -67,8 +61,8 @@ st.markdown(
 st.markdown(
     """
     <div class="hero">
-        <h1>Validador pagado vs contabilizado</h1>
-        <p>CC-nóminas = pagado | PCP0 = contabilizado | Selección por año y Período para nómina</p>
+        <h1>Unificador, comparativo y generador de medios magnéticos</h1>
+        <p>Carga archivos de CC-nóminas y contabilizaciones, clasifica conceptos y genera salidas en Excel, CSV y ZIP.</p>
         <div class="credit">Creado por Andrés Huérfano Dávila - Nómina JMC</div>
     </div>
     """,
@@ -76,63 +70,84 @@ st.markdown(
 )
 
 MAX_EXCEL_ROWS = 1_048_576
-SUPPORTED_EXTENSIONS = {".txt", ".csv", ".xls", ".xlsx", ".xlsb", ".ods"}
 
-ALIASES = {
-    "Número de personal": ["número de personal", "numero de personal", "pernr", "sap", "n pers", "nº pers", "n° pers", "numero personal"],
-    "Nombre del empleado o candidato": ["nombre del empleado o candidato", "nombre del empleado", "nombre empleado", "nombre"],
-    "CC-nómina": ["cc-nómina", "cc-nomina", "cc nómina", "cc nomina", "wagetype", "tipo salario", "tipo de salario", "cc-n.", "cc n"],
-    "Texto expl.CC-nómina": ["texto expl.cc-nómina", "texto expl.cc-nomina", "texto expl cc nómina", "texto expl cc nomina", "texto explicativo cc nómina", "texto explicativo cc nomina", "texto expl", "descripcion cc nómina", "descripcion cc nomina"],
-    "Importe": ["importe", "valor", "monto", "importe total"],
-    "Fecha de pago": ["fecha de pago", "fecha pago"],
-    "Período para nómina": ["período para nómina", "periodo para nomina", "periodo para nómina", "período para nomina", "per.para"],
-    "Período En cálc.nóm.": ["período en cálc.nóm.", "período en cálc nom", "periodo en calc nom", "periodo en cálculo nomina", "periodo en calculo nomina", "periodo en"],
+EXACT_ALIASES = {
+    "Número de personal": ["número de personal", "numero de personal", "nº pers", "n° pers", "n pers", "n pers."],
+    "Nombre del empleado o candidato": ["nombre del empleado o candidato"],
+    "CC-nómina": ["cc-nómina", "cc-nomina", "cc nómina", "cc nomina", "cc-n.", "cc n"],
+    "Texto expl.CC-nómina": ["texto expl.cc-nómina", "texto expl.cc-nomina", "texto expl.cc nómina", "texto expl.cc nomina", "texto expl.cc-nomina"],
+    "Importe": ["importe"],
+    "Fecha de pago": ["fecha de pago"],
+    "Período para nómina": ["período para nómina", "periodo para nomina"],
+    "Período En cálc.nóm.": ["período en cálc.nóm.", "período en cálc nóm", "periodo en calc nom", "periodo en cálculo nómina"],
     "Tipo": ["tipo"],
 }
 
-EXACT_PREFERRED = {
-    "Número de personal": ["Número de personal"],
-    "Nombre del empleado o candidato": ["Nombre del empleado o candidato"],
-    "CC-nómina": ["CC-nómina"],
-    "Texto expl.CC-nómina": ["Texto expl.CC-nómina"],
-    "Importe": ["Importe"],
-    "Fecha de pago": ["Fecha de pago"],
-    "Período para nómina": ["Período para nómina"],
-    "Período En cálc.nóm.": ["Período En cálc.nóm."],
-    "Tipo": ["Tipo"],
+CONTAINS_ALIASES = {
+    "Número de personal": ["numero de personal", "n pers", "nº pers", "sap", "pernr"],
+    "Nombre del empleado o candidato": ["nombre del empleado", "nombre empleado", "candidato"],
+    "CC-nómina": ["cc-n", "cc nomina", "cc nómina", "wagetype", "tipo de salario"],
+    "Texto expl.CC-nómina": ["texto expl", "texto explicativo", "descripcion cc"],
+    "Importe": ["importe", "valor", "monto"],
 }
 
+SUMMARY_COLUMNS_CC = [
+    "Número de personal",
+    "Nombre del empleado o candidato",
+    "Salariales",
+    "Beneficios adicionales",
+    "Importe total",
+]
+DETAIL_COLUMNS_CC = [
+    "Número de personal",
+    "Nombre del empleado o candidato",
+    "CC-nómina",
+    "Texto expl.CC-nómina",
+    "Salariales",
+    "Beneficios adicionales",
+    "Importe total",
+]
+SUMMARY_COLUMNS_CONTAB = [
+    "Número de personal",
+    "Salariales",
+    "Beneficios adicionales",
+    "Importe total",
+]
+DETAIL_COLUMNS_CONTAB = [
+    "Número de personal",
+    "CC-nómina",
+    "Texto expl.CC-nómina",
+    "Salariales",
+    "Beneficios adicionales",
+    "Importe total",
+]
 
-def init_state() -> None:
-    defaults = {
-        "cc_raw": None,
-        "cc_log": pd.DataFrame(columns=["archivo", "estado", "registros", "detalle"]),
-        "pcp0_raw": None,
-        "pcp0_log": pd.DataFrame(columns=["archivo", "estado", "registros", "detalle"]),
-        "conceptos_df": None,
-        "cc_files_hash": None,
-        "pcp0_files_hash": None,
-        "conceptos_hash": None,
-        "selected_year": None,
-        "selected_periods": [],
-        "cc_resumen": None,
-        "cc_detalle": None,
-        "pcp0_resumen": None,
-        "pcp0_detalle": None,
-        "comparativo_resumen": None,
-        "comparativo_detalle": None,
-        "comparativo_periodo": None,
-        "parametros_df": None,
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+CC_KEEP_COLUMNS = [
+    "Número de personal",
+    "Nombre del empleado o candidato",
+    "CC-nómina",
+    "Texto expl.CC-nómina",
+    "Importe",
+    "Fecha de pago",
+    "Fecha de pago_display",
+    "Fecha de pago_año",
+    "Período para nómina",
+    "__archivo_origen__",
+    "__hoja_origen__",
+]
+CONTAB_KEEP_COLUMNS = [
+    "Número de personal",
+    "CC-nómina",
+    "Texto expl.CC-nómina",
+    "Importe",
+    "Período para nómina",
+    "Período En cálc.nóm.",
+    "__archivo_origen__",
+    "__hoja_origen__",
+]
 
 
-init_state()
-
-
-def normalize_text(value: object) -> str:
+def normalize_text(value) -> str:
     if value is None:
         return ""
     text = str(value).strip().lower()
@@ -143,7 +158,21 @@ def normalize_text(value: object) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def parse_number(value: object) -> float:
+def normalize_id(value) -> Optional[str]:
+    if pd.isna(value):
+        return None
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        if np.isnan(value):
+            return None
+        return str(int(value)) if float(value).is_integer() else str(value).strip()
+    text = str(value).strip()
+    text = re.sub(r"\.0+$", "", text)
+    return text or None
+
+
+def parse_number(value) -> float:
     if pd.isna(value):
         return 0.0
     if isinstance(value, (int, float, np.integer, np.floating)):
@@ -170,31 +199,33 @@ def parse_number(value: object) -> float:
         return 0.0
 
 
-def normalize_id(value: object) -> Optional[str]:
-    if pd.isna(value):
+def normalize_tipo(value) -> Optional[str]:
+    text = normalize_text(value)
+    if not text:
         return None
-    if isinstance(value, (int, np.integer)):
-        return str(int(value))
-    if isinstance(value, (float, np.floating)):
-        if np.isnan(value):
-            return None
-        return str(int(value)) if float(value).is_integer() else str(value).strip()
-    text = str(value).strip()
-    text = re.sub(r"\.0+$", "", text)
-    return text or None
+    if text.startswith("salaria"):
+        return "Salarial"
+    if text.startswith("benef") or "beneficio" in text:
+        return "Beneficio"
+    if text in {"no aplica", "noaplica", "na", "n a", "no"}:
+        return "No aplica"
+    return None
 
 
 def robust_parse_dates(series: pd.Series) -> pd.Series:
     if pd.api.types.is_datetime64_any_dtype(series):
         return pd.to_datetime(series, errors="coerce")
+
     non_null = series.dropna()
     if non_null.empty:
         return pd.to_datetime(series, errors="coerce")
+
     if pd.api.types.is_numeric_dtype(non_null):
         numeric = pd.to_numeric(series, errors="coerce")
         valid = numeric.dropna()
         if not valid.empty and valid.between(20000, 70000).mean() > 0.9:
             return pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
+
     text = series.astype(str).str.strip().replace({"": np.nan, "nan": np.nan, "NaT": np.nan, "None": np.nan})
     result = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
 
@@ -211,37 +242,54 @@ def robust_parse_dates(series: pd.Series) -> pd.Series:
     if dmy_mask.any():
         result.loc[dmy_mask] = pd.to_datetime(text[dmy_mask], format="%d/%m/%Y", errors="coerce")
 
+    dot_mask = text.str.match(r"^\d{1,2}\.\d{1,2}\.\d{4}$", na=False)
+    if dot_mask.any():
+        result.loc[dot_mask] = pd.to_datetime(text[dot_mask], format="%d.%m.%Y", errors="coerce")
+
     rem = result.isna() & text.notna()
     if rem.any():
         result.loc[rem] = pd.to_datetime(text[rem], errors="coerce")
+
     return result
 
 
-def find_column(df: pd.DataFrame, canonical_name: str) -> Optional[str]:
-    preferred = EXACT_PREFERRED.get(canonical_name, [])
-    normalized_preferred = {normalize_text(x) for x in preferred}
-    for col in df.columns:
-        if normalize_text(col) in normalized_preferred:
+def preferred_column_match(df: pd.DataFrame, canonical_name: str) -> Optional[str]:
+    normalized_cols = {col: normalize_text(col) for col in df.columns}
+
+    # 1) exact canonical or explicit exact aliases
+    exact_aliases = [normalize_text(canonical_name)] + [normalize_text(x) for x in EXACT_ALIASES.get(canonical_name, [])]
+    for col, ncol in normalized_cols.items():
+        if ncol in exact_aliases:
             return col
-    canonical_norm = normalize_text(canonical_name)
-    for col in df.columns:
-        if normalize_text(col) == canonical_norm:
-            return col
-    aliases = [normalize_text(a) for a in ALIASES.get(canonical_name, [])]
-    alias_set = set(aliases)
-    for col in df.columns:
-        if normalize_text(col) in alias_set:
-            return col
-    for col in df.columns:
-        ncol = normalize_text(col)
-        if canonical_name == "Período para nómina":
+
+    # 2) strong rules for ambiguous columns
+    if canonical_name == "Período para nómina":
+        for col, ncol in normalized_cols.items():
             if ncol == "periodo para nomina":
                 return col
-        elif canonical_name == "Período En cálc.nóm.":
-            if ncol == "periodo en calc nom":
+        return None
+    if canonical_name == "Período En cálc.nóm.":
+        strong = {
+            "periodo en calc nom",
+            "periodo en calculo nomina",
+            "periodo en calculo de nomina",
+            "periodo en cal nom",
+            "periodo en calculo n m",
+        }
+        for col, ncol in normalized_cols.items():
+            if ncol in strong or ("periodo en" in ncol and "nom" in ncol):
                 return col
-        else:
-            if any(alias in ncol for alias in aliases):
+        return None
+    if canonical_name == "Fecha de pago":
+        for col, ncol in normalized_cols.items():
+            if ncol == "fecha de pago":
+                return col
+        return None
+
+    # 3) contains aliases for non-ambiguous columns
+    for col, ncol in normalized_cols.items():
+        for alias in CONTAINS_ALIASES.get(canonical_name, []):
+            if normalize_text(alias) in ncol:
                 return col
     return None
 
@@ -249,21 +297,22 @@ def find_column(df: pd.DataFrame, canonical_name: str) -> Optional[str]:
 def add_canonical_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
-    for canonical in ALIASES:
-        source = find_column(df, canonical)
-        if source and canonical not in df.columns:
-            df[canonical] = df[source]
+
+    for canonical in EXACT_ALIASES:
+        original = preferred_column_match(df, canonical)
+        if original and canonical not in df.columns:
+            df[canonical] = df[original]
 
     if "Número de personal" in df.columns:
         df["Número de personal"] = df["Número de personal"].map(normalize_id)
     if "Nombre del empleado o candidato" in df.columns:
-        df["Nombre del empleado o candidato"] = df["Nombre del empleado o candidato"].astype(str).replace("nan", "").str.strip()
+        df["Nombre del empleado o candidato"] = df["Nombre del empleado o candidato"].astype("string").fillna("").str.strip()
     if "CC-nómina" in df.columns:
-        df["CC-nómina"] = df["CC-nómina"].astype(str).replace("nan", "").str.strip()
+        df["CC-nómina"] = df["CC-nómina"].astype("string").fillna("").str.strip()
     if "Texto expl.CC-nómina" in df.columns:
-        df["Texto expl.CC-nómina"] = df["Texto expl.CC-nómina"].astype(str).replace("nan", "").str.strip()
+        df["Texto expl.CC-nómina"] = df["Texto expl.CC-nómina"].astype("string").fillna("").str.strip()
     if "Importe" in df.columns:
-        df["Importe"] = df["Importe"].map(parse_number)
+        df["Importe"] = df["Importe"].map(parse_number).astype("float64")
     if "Período para nómina" in df.columns:
         df["Período para nómina"] = df["Período para nómina"].map(normalize_id)
     if "Período En cálc.nóm." in df.columns:
@@ -271,13 +320,76 @@ def add_canonical_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "Fecha de pago" in df.columns:
         df["Fecha de pago"] = robust_parse_dates(df["Fecha de pago"])
         df["Fecha de pago_display"] = df["Fecha de pago"].dt.strftime("%d/%m/%Y")
-        df["Fecha de pago_año"] = df["Fecha de pago"].dt.year.astype("Int64")
+        df["Fecha de pago_año"] = df["Fecha de pago"].dt.year.astype("Int64").astype("string").fillna("")
+
     return df
 
 
-def get_uploads_hash(files: Sequence) -> Optional[str]:
-    if not files:
-        return None
+def project_dataset(df: pd.DataFrame, dataset_type: str) -> pd.DataFrame:
+    df = add_canonical_columns(df)
+
+    if dataset_type == "cc":
+        required = ["Número de personal", "Nombre del empleado o candidato", "CC-nómina", "Importe"]
+        missing = [col for col in required if col not in df.columns]
+        if missing:
+            raise ValueError("Faltan columnas obligatorias: " + ", ".join(missing))
+        if "Texto expl.CC-nómina" not in df.columns:
+            df["Texto expl.CC-nómina"] = ""
+        if "Período para nómina" not in df.columns:
+            df["Período para nómina"] = ""
+        if "Fecha de pago" not in df.columns:
+            df["Fecha de pago"] = pd.NaT
+            df["Fecha de pago_display"] = ""
+            df["Fecha de pago_año"] = ""
+        for col in ["__archivo_origen__", "__hoja_origen__"]:
+            if col not in df.columns:
+                df[col] = ""
+        out = df[[col for col in CC_KEEP_COLUMNS if col in df.columns]].copy()
+        out["Nombre del empleado o candidato"] = out["Nombre del empleado o candidato"].astype("string")
+        out["CC-nómina"] = out["CC-nómina"].astype("string")
+        out["Texto expl.CC-nómina"] = out["Texto expl.CC-nómina"].astype("string")
+        if "Período para nómina" in out.columns:
+            out["Período para nómina"] = out["Período para nómina"].astype("string")
+        if "Fecha de pago_display" in out.columns:
+            out["Fecha de pago_display"] = out["Fecha de pago_display"].astype("string")
+        if "Fecha de pago_año" in out.columns:
+            out["Fecha de pago_año"] = out["Fecha de pago_año"].astype("string")
+        return out
+
+    if dataset_type == "contab":
+        required = ["Número de personal", "CC-nómina", "Importe"]
+        missing = [col for col in required if col not in df.columns]
+        if missing:
+            raise ValueError("Faltan columnas obligatorias: " + ", ".join(missing))
+        if "Texto expl.CC-nómina" not in df.columns:
+            df["Texto expl.CC-nómina"] = ""
+        if "Período para nómina" not in df.columns:
+            df["Período para nómina"] = ""
+        if "Período En cálc.nóm." not in df.columns:
+            df["Período En cálc.nóm."] = ""
+        for col in ["__archivo_origen__", "__hoja_origen__"]:
+            if col not in df.columns:
+                df[col] = ""
+        out = df[[col for col in CONTAB_KEEP_COLUMNS if col in df.columns]].copy()
+        out["CC-nómina"] = out["CC-nómina"].astype("string")
+        out["Texto expl.CC-nómina"] = out["Texto expl.CC-nómina"].astype("string")
+        out["Período para nómina"] = out["Período para nómina"].astype("string")
+        out["Período En cálc.nóm."] = out["Período En cálc.nóm."].astype("string")
+        return out
+
+    raise ValueError("Tipo de dataset no soportado")
+
+
+def hash_uploaded_file(uploaded_file) -> str:
+    data = uploaded_file.getvalue()
+    h = hashlib.md5()
+    h.update(uploaded_file.name.encode("utf-8", errors="ignore"))
+    h.update(str(len(data)).encode())
+    h.update(data[:4096])
+    return h.hexdigest()
+
+
+def hash_uploaded_files(files) -> str:
     h = hashlib.md5()
     for f in files:
         data = f.getvalue()
@@ -287,25 +399,15 @@ def get_uploads_hash(files: Sequence) -> Optional[str]:
     return h.hexdigest()
 
 
-def get_upload_hash(uploaded_file) -> Optional[str]:
-    if uploaded_file is None:
-        return None
-    data = uploaded_file.getvalue()
-    h = hashlib.md5()
-    h.update(uploaded_file.name.encode("utf-8", errors="ignore"))
-    h.update(str(len(data)).encode())
-    h.update(data[:4096])
-    return h.hexdigest()
-
-
-def read_text_bytes(data: bytes, filename: str) -> pd.DataFrame:
+def read_text_file(data: bytes, filename: str) -> pd.DataFrame:
     encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1"]
     last_error = None
 
+    # 1) SAP-style report with pipes
     for enc in encodings:
         try:
             text = data.decode(enc, errors="ignore")
-            lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+            lines = [ln.rstrip("\n\r") for ln in text.splitlines() if ln.strip()]
             pipe_lines = [ln for ln in lines if "|" in ln]
             if len(pipe_lines) >= 2:
                 header = None
@@ -314,8 +416,8 @@ def read_text_bytes(data: bytes, filename: str) -> pd.DataFrame:
                     parts = [p.strip() for p in ln.strip().strip("|").split("|")]
                     if len(parts) < 2:
                         continue
-                    joined = " ".join(parts).lower()
-                    if any(k in joined for k in ["importe", "cc", "per", "texto expl", "pers"]):
+                    compact = " ".join(parts).lower()
+                    if any(key in compact for key in ["importe", "lib.mayor", "fe.contab", "fecha doc", "nº ejec"]):
                         header = parts
                         continue
                     if header and len(parts) == len(header):
@@ -325,6 +427,7 @@ def read_text_bytes(data: bytes, filename: str) -> pd.DataFrame:
         except Exception as exc:
             last_error = exc
 
+    # 2) delimited txt/csv
     for enc in encodings:
         for sep in [None, ";", "\t", "|", ","]:
             try:
@@ -337,6 +440,7 @@ def read_text_bytes(data: bytes, filename: str) -> pd.DataFrame:
             except Exception as exc:
                 last_error = exc
 
+    # 3) fixed width fallback
     for enc in encodings:
         try:
             df = pd.read_fwf(io.BytesIO(data), encoding=enc, dtype=object)
@@ -345,10 +449,10 @@ def read_text_bytes(data: bytes, filename: str) -> pd.DataFrame:
         except Exception as exc:
             last_error = exc
 
-    raise ValueError(f"No fue posible leer {filename}: {last_error}")
+    raise ValueError(f"No fue posible leer el archivo de texto: {filename}. {last_error}")
 
 
-def read_excel_bytes(data: bytes, filename: str) -> pd.DataFrame:
+def read_excel_file(data: bytes, filename: str) -> pd.DataFrame:
     ext = Path(filename).suffix.lower()
     engine = None
     if ext == ".xlsb":
@@ -358,16 +462,16 @@ def read_excel_bytes(data: bytes, filename: str) -> pd.DataFrame:
     elif ext == ".ods":
         engine = "odf"
 
-    xls = pd.ExcelFile(io.BytesIO(data), engine=engine)
+    workbook = pd.ExcelFile(io.BytesIO(data), engine=engine)
     frames = []
-    for sheet in xls.sheet_names:
+    for sheet in workbook.sheet_names:
         try:
-            temp = pd.read_excel(io.BytesIO(data), sheet_name=sheet, engine=engine, dtype=object)
-            if temp is not None and not temp.empty:
-                temp = temp.copy()
-                temp["__archivo_origen__"] = filename
-                temp["__hoja_origen__"] = sheet
-                frames.append(temp)
+            part = pd.read_excel(io.BytesIO(data), sheet_name=sheet, engine=engine, dtype=object)
+            if part is not None and not part.empty:
+                part = part.copy()
+                part["__archivo_origen__"] = filename
+                part["__hoja_origen__"] = sheet
+                frames.append(part)
         except Exception:
             continue
     if not frames:
@@ -379,286 +483,226 @@ def read_uploaded_table(uploaded_file) -> pd.DataFrame:
     filename = uploaded_file.name
     data = uploaded_file.getvalue()
     ext = Path(filename).suffix.lower()
-
-    if ext in {".xlsx", ".xls", ".xlsb", ".ods"}:
-        df = read_excel_bytes(data, filename)
-    elif ext in {".txt", ".csv"}:
-        df = read_text_bytes(data, filename)
+    if ext in {".xlsx", ".xlsm", ".xls", ".xlsb", ".ods"}:
+        return read_excel_file(data, filename)
+    if ext in {".csv", ".txt"}:
+        df = read_text_file(data, filename)
         df["__archivo_origen__"] = filename
         df["__hoja_origen__"] = "TXT/CSV"
-    else:
-        raise ValueError(f"Formato no soportado: {filename}")
-
-    return add_canonical_columns(df)
+        return df
+    raise ValueError(f"Formato no soportado: {filename}")
 
 
-def combine_uploaded_files(uploaded_files, label: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    frames = []
-    logs = []
-    progress = st.progress(0, text=f"Leyendo archivos de {label}...")
+def combine_uploaded_files(uploaded_files, dataset_type: str, label: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    frames: List[pd.DataFrame] = []
+    logs: List[Dict[str, object]] = []
+
+    progress = st.progress(0, text=f"Leyendo archivos de {label}... 0/{len(uploaded_files)}")
+    status = st.empty()
+
     for idx, file in enumerate(uploaded_files, start=1):
+        status.info(f"Leyendo: {file.name}")
         try:
-            df = read_uploaded_table(file)
-            frames.append(df)
-            logs.append({"archivo": file.name, "estado": "OK", "registros": int(len(df)), "detalle": "Archivo leído correctamente"})
+            raw = read_uploaded_table(file)
+            reduced = project_dataset(raw, dataset_type)
+            frames.append(reduced)
+            logs.append(
+                {
+                    "archivo": file.name,
+                    "estado": "OK",
+                    "registros": int(len(reduced)),
+                    "columnas_detectadas": ", ".join(reduced.columns.astype(str).tolist()),
+                    "detalle": "Archivo leído correctamente",
+                }
+            )
         except Exception as exc:
-            logs.append({"archivo": file.name, "estado": "ERROR", "registros": 0, "detalle": str(exc)})
+            logs.append(
+                {
+                    "archivo": file.name,
+                    "estado": "ERROR",
+                    "registros": 0,
+                    "columnas_detectadas": "",
+                    "detalle": str(exc),
+                }
+            )
         progress.progress(idx / len(uploaded_files), text=f"Leyendo archivos de {label}... {idx}/{len(uploaded_files)}")
+
+    status.empty()
     progress.empty()
 
     if not frames:
-        raise ValueError(f"No se pudo leer ningún archivo de {label}")
-    return pd.concat(frames, ignore_index=True, sort=False), pd.DataFrame(logs)
+        raise ValueError("No se pudo leer ninguno de los archivos cargados.")
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    log_df = pd.DataFrame(logs)
+    return combined, log_df
 
 
-def normalize_tipo(value: object) -> Optional[str]:
-    text = normalize_text(value)
-    if not text:
-        return None
-    if text.startswith("salaria"):
-        return "Salarial"
-    if text.startswith("benef") or "beneficio" in text:
-        return "Beneficio"
-    if text in {"no aplica", "noaplica", "na", "n a", "no"}:
-        return "No aplica"
-    return None
+def create_concepts_template(source_df: pd.DataFrame) -> pd.DataFrame:
+    template = source_df.copy()
+    if "CC-nómina" not in template.columns:
+        template["CC-nómina"] = ""
+    if "Texto expl.CC-nómina" not in template.columns:
+        template["Texto expl.CC-nómina"] = ""
+    template = template[["CC-nómina", "Texto expl.CC-nómina"]].copy()
+    template["CC-nómina"] = template["CC-nómina"].astype("string").fillna("").str.strip()
+    template["Texto expl.CC-nómina"] = template["Texto expl.CC-nómina"].astype("string").fillna("").str.strip()
+    template = template[template["CC-nómina"].ne("")].drop_duplicates().sort_values(["CC-nómina", "Texto expl.CC-nómina"])
+    template["Tipo"] = ""
+    return template.reset_index(drop=True)
 
 
-def load_concepts_from_upload(uploaded_file) -> pd.DataFrame:
-    df = read_uploaded_table(uploaded_file)
+def prepare_concepts_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = add_canonical_columns(df.copy())
     for col in ["CC-nómina", "Texto expl.CC-nómina", "Tipo"]:
         if col not in df.columns:
-            raise ValueError(f"El archivo de conceptos no tiene la columna {col}")
-
-    concepts = df[["CC-nómina", "Texto expl.CC-nómina", "Tipo"]].copy()
-    concepts["CC-nómina"] = concepts["CC-nómina"].astype(str).replace("nan", "").str.strip()
-    concepts["Texto expl.CC-nómina"] = concepts["Texto expl.CC-nómina"].astype(str).replace("nan", "").str.strip()
-    concepts["Tipo"] = concepts["Tipo"].map(normalize_tipo)
-    concepts = concepts[concepts["CC-nómina"].ne("")].drop_duplicates(subset=["CC-nómina"], keep="first").reset_index(drop=True)
-
-    invalid = concepts[concepts["Tipo"].isna()]
-    if not invalid.empty:
-        sample = invalid[["CC-nómina", "Texto expl.CC-nómina"]].head(10)
-        raise ValueError("Hay conceptos con Tipo inválido. Usa únicamente: Salarial, Beneficio o No aplica.\n" + sample.to_string(index=False))
-    return concepts
+            df[col] = ""
+    out = df[["CC-nómina", "Texto expl.CC-nómina", "Tipo"]].copy()
+    out["CC-nómina"] = out["CC-nómina"].astype("string").fillna("").str.strip()
+    out["Texto expl.CC-nómina"] = out["Texto expl.CC-nómina"].astype("string").fillna("").str.strip()
+    out["Tipo"] = out["Tipo"].map(normalize_tipo)
+    out = out[out["CC-nómina"].ne("")].drop_duplicates(subset=["CC-nómina"], keep="first")
+    return out.reset_index(drop=True)
 
 
-def require_columns(df: pd.DataFrame, required: Sequence[str], label: str) -> None:
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"En {label} faltan columnas obligatorias: {', '.join(missing)}")
+def extract_concepts_from_upload(uploaded_file) -> pd.DataFrame:
+    raw = read_uploaded_table(uploaded_file)
+    return prepare_concepts_df(raw)
 
 
-def get_available_years(df_cc: pd.DataFrame) -> List[int]:
-    if "Fecha de pago_año" not in df_cc.columns:
-        return []
-    years = [int(x) for x in df_cc["Fecha de pago_año"].dropna().unique().tolist()]
-    return sorted(years)
-
-
-def get_periods_for_year(df_cc: pd.DataFrame, year: int) -> List[str]:
-    work = df_cc[df_cc["Fecha de pago"].dt.year.eq(year)].copy()
-    if "Período para nómina" not in work.columns:
-        return []
-    periods = [str(x).strip() for x in work["Período para nómina"].dropna().astype(str).unique().tolist() if str(x).strip()]
-    return sorted(periods)
-
-
-def filter_cc(df_cc: pd.DataFrame, year: int, periods: Sequence[str]) -> pd.DataFrame:
-    work = df_cc[df_cc["Fecha de pago"].dt.year.eq(year)].copy()
-    work = work[work["Período para nómina"].astype(str).isin([str(p) for p in periods])].copy()
-    return work
-
-
-def filter_pcp0(df_pcp0: pd.DataFrame, periods: Sequence[str]) -> pd.DataFrame:
-    periods_set = {str(p).strip() for p in periods if str(p).strip()}
-    if not periods_set:
-        return df_pcp0.iloc[0:0].copy()
-
-    mask = pd.Series(False, index=df_pcp0.index)
-    if "Período para nómina" in df_pcp0.columns:
-        mask = mask | df_pcp0["Período para nómina"].astype(str).isin(periods_set)
-    if "Período En cálc.nóm." in df_pcp0.columns:
-        mask = mask | df_pcp0["Período En cálc.nóm."].astype(str).isin(periods_set)
-    return df_pcp0[mask].copy()
-
-
-def process_cc(df: pd.DataFrame, concepts: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    require_columns(df, ["Número de personal", "Nombre del empleado o candidato", "CC-nómina", "Importe"], "CC-nóminas")
-    work = df.copy()
+def process_cc_nominas(data_df: pd.DataFrame, concepts_df: pd.DataFrame):
+    progress = st.progress(0, text="Procesando CC-nóminas...")
+    work = data_df.copy()
+    work["Nombre del empleado o candidato"] = work["Nombre del empleado o candidato"].astype("string").fillna("").str.strip()
     work["Importe"] = work["Importe"].map(parse_number)
-    work["Nombre del empleado o candidato"] = work["Nombre del empleado o candidato"].fillna("").astype(str).str.strip()
 
+    progress.progress(0.25, text="Preparando conceptos...")
+    concepts = prepare_concepts_df(concepts_df)
     merged = work.merge(concepts, on="CC-nómina", how="left", suffixes=("", "_map"))
+
     if "Texto expl.CC-nómina_map" in merged.columns:
         merged["Texto expl.CC-nómina"] = merged["Texto expl.CC-nómina_map"].fillna(merged.get("Texto expl.CC-nómina", ""))
-    merged["Tipo_final"] = merged["Tipo_map"] if "Tipo_map" in merged.columns else merged["Tipo"]
-    merged = merged[merged["Tipo_final"].isin(["Salarial", "Beneficio"])].copy()
+    if "Tipo_map" in merged.columns:
+        merged["Tipo_concepto"] = merged["Tipo_map"]
+    else:
+        merged["Tipo_concepto"] = merged.get("Tipo", None)
 
-    merged["Salariales"] = np.where(merged["Tipo_final"].eq("Salarial"), merged["Importe"], 0.0)
-    merged["Beneficios adicionales"] = np.where(merged["Tipo_final"].eq("Beneficio"), merged["Importe"], 0.0)
+    progress.progress(0.55, text="Filtrando conceptos aplicables...")
+    merged = merged[merged["Tipo_concepto"].isin(["Salarial", "Beneficio"])].copy()
+    merged["Salariales"] = np.where(merged["Tipo_concepto"].eq("Salarial"), merged["Importe"], 0.0)
+    merged["Beneficios adicionales"] = np.where(merged["Tipo_concepto"].eq("Beneficio"), merged["Importe"], 0.0)
 
+    progress.progress(0.8, text="Generando resumen y detalle...")
     resumen = (
         merged.groupby(["Número de personal", "Nombre del empleado o candidato"], dropna=False, as_index=False)[["Salariales", "Beneficios adicionales"]]
         .sum()
         .sort_values(["Número de personal", "Nombre del empleado o candidato"])
-        .reset_index(drop=True)
     )
     resumen["Importe total"] = resumen["Salariales"] + resumen["Beneficios adicionales"]
+    resumen = resumen[SUMMARY_COLUMNS_CC].reset_index(drop=True)
 
     detalle = (
         merged.groupby(["Número de personal", "Nombre del empleado o candidato", "CC-nómina", "Texto expl.CC-nómina"], dropna=False, as_index=False)[["Salariales", "Beneficios adicionales"]]
         .sum()
         .sort_values(["Número de personal", "CC-nómina"])
-        .reset_index(drop=True)
     )
     detalle["Importe total"] = detalle["Salariales"] + detalle["Beneficios adicionales"]
-    return resumen, detalle
+    detalle = detalle[DETAIL_COLUMNS_CC].reset_index(drop=True)
+
+    progress.progress(1.0, text="CC-nóminas procesadas")
+    progress.empty()
+    return resumen, detalle, concepts
 
 
-def process_pcp0(df: pd.DataFrame, concepts: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    require_columns(df, ["Número de personal", "CC-nómina", "Importe"], "PCP0")
-    work = df.copy()
+def process_contabilizaciones(data_df: pd.DataFrame, concepts_df: pd.DataFrame):
+    progress = st.progress(0, text="Procesando contabilizaciones...")
+    work = data_df.copy()
     work["Importe"] = work["Importe"].map(parse_number)
 
+    progress.progress(0.25, text="Preparando conceptos...")
+    concepts = prepare_concepts_df(concepts_df)
     merged = work.merge(concepts, on="CC-nómina", how="left", suffixes=("", "_map"))
+
     if "Texto expl.CC-nómina_map" in merged.columns:
         merged["Texto expl.CC-nómina"] = merged["Texto expl.CC-nómina_map"].fillna(merged.get("Texto expl.CC-nómina", ""))
-    merged["Tipo_final"] = merged["Tipo_map"] if "Tipo_map" in merged.columns else merged["Tipo"]
-    merged = merged[merged["Tipo_final"].isin(["Salarial", "Beneficio"])].copy()
+    if "Tipo_map" in merged.columns:
+        merged["Tipo_concepto"] = merged["Tipo_map"]
+    else:
+        merged["Tipo_concepto"] = merged.get("Tipo", None)
 
-    merged["Salariales"] = np.where(merged["Tipo_final"].eq("Salarial"), merged["Importe"], 0.0)
-    merged["Beneficios adicionales"] = np.where(merged["Tipo_final"].eq("Beneficio"), merged["Importe"], 0.0)
+    progress.progress(0.55, text="Filtrando conceptos aplicables...")
+    merged = merged[merged["Tipo_concepto"].isin(["Salarial", "Beneficio"])].copy()
+    merged["Salariales"] = np.where(merged["Tipo_concepto"].eq("Salarial"), merged["Importe"], 0.0)
+    merged["Beneficios adicionales"] = np.where(merged["Tipo_concepto"].eq("Beneficio"), merged["Importe"], 0.0)
 
+    progress.progress(0.8, text="Generando resumen y detalle...")
     resumen = (
         merged.groupby(["Número de personal"], dropna=False, as_index=False)[["Salariales", "Beneficios adicionales"]]
         .sum()
         .sort_values(["Número de personal"])
-        .reset_index(drop=True)
     )
     resumen["Importe total"] = resumen["Salariales"] + resumen["Beneficios adicionales"]
+    resumen = resumen[SUMMARY_COLUMNS_CONTAB].reset_index(drop=True)
 
     detalle = (
         merged.groupby(["Número de personal", "CC-nómina", "Texto expl.CC-nómina"], dropna=False, as_index=False)[["Salariales", "Beneficios adicionales"]]
         .sum()
         .sort_values(["Número de personal", "CC-nómina"])
-        .reset_index(drop=True)
     )
     detalle["Importe total"] = detalle["Salariales"] + detalle["Beneficios adicionales"]
-    return resumen, detalle
+    detalle = detalle[DETAIL_COLUMNS_CONTAB].reset_index(drop=True)
+
+    progress.progress(1.0, text="Contabilizaciones procesadas")
+    progress.empty()
+    return resumen, detalle, concepts
 
 
-def compare_cc_vs_pcp0(cc_summary: pd.DataFrame, cc_detail: pd.DataFrame, pcp0_summary: pd.DataFrame, pcp0_detail: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    cc_sum = cc_summary[["Número de personal", "Nombre del empleado o candidato", "Importe total"]].copy().rename(columns={"Importe total": "Importe total CC-nóminas"})
-    pcp0_sum = pcp0_summary[["Número de personal", "Importe total"]].copy().rename(columns={"Importe total": "Importe total Contabilización"})
-
-    resumen = cc_sum.merge(pcp0_sum, on="Número de personal", how="outer")
-    resumen["Nombre del empleado o candidato"] = resumen["Nombre del empleado o candidato"].fillna("")
-    resumen["Importe total CC-nóminas"] = resumen["Importe total CC-nóminas"].fillna(0.0)
-    resumen["Importe total Contabilización"] = resumen["Importe total Contabilización"].fillna(0.0)
-    resumen["Diferencia"] = resumen["Importe total CC-nóminas"] - resumen["Importe total Contabilización"]
-
-    resumen["Estado"] = np.select(
-        [
-            resumen["Diferencia"].abs().lt(0.005),
-            (resumen["Importe total CC-nóminas"] > 0) & (resumen["Importe total Contabilización"] == 0),
-            (resumen["Importe total CC-nóminas"] == 0) & (resumen["Importe total Contabilización"] > 0),
-        ],
-        ["OK", "Pagado no contabilizado", "Contabilizado sin pago"],
-        default="Diferencia por revisar",
-    )
-
-    cc_det = cc_detail[["Número de personal", "CC-nómina", "Texto expl.CC-nómina", "Importe total"]].copy().rename(columns={"Importe total": "Importe total CC-nóminas"})
-    pcp0_det = pcp0_detail[["Número de personal", "CC-nómina", "Texto expl.CC-nómina", "Importe total"]].copy().rename(columns={"Importe total": "Importe total Contabilización"})
-
-    detalle = cc_det.merge(pcp0_det, on=["Número de personal", "CC-nómina"], how="outer", suffixes=("_cc", "_pcp0"))
-    detalle["Texto expl.CC-nómina"] = detalle["Texto expl.CC-nómina_cc"].fillna(detalle["Texto expl.CC-nómina_pcp0"])
-    detalle["Importe total CC-nóminas"] = detalle["Importe total CC-nóminas"].fillna(0.0)
-    detalle["Importe total Contabilización"] = detalle["Importe total Contabilización"].fillna(0.0)
-    detalle["Diferencia"] = detalle["Importe total CC-nóminas"] - detalle["Importe total Contabilización"]
-
-    saps_diff = resumen.loc[resumen["Estado"] != "OK", "Número de personal"].tolist()
-    detalle = detalle[detalle["Número de personal"].isin(saps_diff)].copy()
-    detalle = detalle[detalle["Diferencia"].abs() >= 0.005].copy()
-    detalle = detalle[["Número de personal", "CC-nómina", "Texto expl.CC-nómina", "Importe total CC-nóminas", "Importe total Contabilización", "Diferencia"]].sort_values(["Número de personal", "CC-nómina"]).reset_index(drop=True)
-    resumen = resumen.sort_values(["Estado", "Número de personal"]).reset_index(drop=True)
-    return resumen, detalle
-
-
-def build_period_summary(df_cc: pd.DataFrame, df_pcp0: pd.DataFrame, concepts: pd.DataFrame) -> pd.DataFrame:
-    cc_period = df_cc.merge(concepts[["CC-nómina", "Tipo"]], on="CC-nómina", how="left", suffixes=("", "_map"))
-    cc_period["Tipo_final"] = cc_period["Tipo_map"] if "Tipo_map" in cc_period.columns else cc_period["Tipo"]
-    cc_period = cc_period[cc_period["Tipo_final"].isin(["Salarial", "Beneficio"])].copy()
-    cc_period["Importe"] = cc_period["Importe"].map(parse_number)
-    cc_period["Periodo"] = cc_period["Período para nómina"].astype(str)
-    cc_by_period = cc_period.groupby("Periodo", as_index=False)["Importe"].sum().rename(columns={"Importe": "Pagado CC"})
-
-    pcp0_period = df_pcp0.merge(concepts[["CC-nómina", "Tipo"]], on="CC-nómina", how="left", suffixes=("", "_map"))
-    pcp0_period["Tipo_final"] = pcp0_period["Tipo_map"] if "Tipo_map" in pcp0_period.columns else pcp0_period["Tipo"]
-    pcp0_period = pcp0_period[pcp0_period["Tipo_final"].isin(["Salarial", "Beneficio"])].copy()
-    pcp0_period["Importe"] = pcp0_period["Importe"].map(parse_number)
-
-    parts = []
-    if "Período para nómina" in pcp0_period.columns:
-        parts.append(
-            pcp0_period.assign(Periodo=pcp0_period["Período para nómina"].astype(str))
-            .groupby("Periodo", as_index=False)["Importe"]
-            .sum()
-            .rename(columns={"Importe": "Contabilizado PCP0"})
-        )
-    if "Período En cálc.nóm." in pcp0_period.columns:
-        parts.append(
-            pcp0_period.assign(Periodo=pcp0_period["Período En cálc.nóm."].astype(str))
-            .groupby("Periodo", as_index=False)["Importe"]
-            .sum()
-            .rename(columns={"Importe": "Contabilizado PCP0"})
-        )
-
-    pcp0_by_period = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["Periodo", "Contabilizado PCP0"])
-    if not pcp0_by_period.empty:
-        pcp0_by_period = pcp0_by_period.groupby("Periodo", as_index=False)["Contabilizado PCP0"].sum()
-
-    resumen = cc_by_period.merge(pcp0_by_period, on="Periodo", how="outer").fillna(0.0)
-    resumen["Diferencia"] = resumen["Pagado CC"] - resumen["Contabilizado PCP0"]
-    return resumen.sort_values("Periodo").reset_index(drop=True)
-
-
-def chunk_dataframe(df: pd.DataFrame, max_rows: int = MAX_EXCEL_ROWS - 1) -> List[pd.DataFrame]:
-    if len(df) <= max_rows:
+def chunk_dataframe(df: pd.DataFrame, chunk_size: int = MAX_EXCEL_ROWS) -> List[pd.DataFrame]:
+    if len(df) <= chunk_size:
         return [df]
-    parts = math.ceil(len(df) / max_rows)
-    return [df.iloc[i * max_rows : (i + 1) * max_rows].copy() for i in range(parts)]
+    parts = []
+    for start in range(0, len(df), chunk_size):
+        parts.append(df.iloc[start : start + chunk_size].copy())
+    return parts
 
 
-def write_sheet_with_format(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataFrame) -> None:
-    df.to_excel(writer, sheet_name=sheet_name, index=False)
+def format_excel_sheet(writer, sheet_name: str, df: pd.DataFrame):
     workbook = writer.book
-    ws = writer.sheets[sheet_name]
+    worksheet = writer.sheets[sheet_name]
     header_fmt = workbook.add_format({"bold": True, "bg_color": "#D9EAF7", "border": 1, "text_wrap": True, "valign": "top"})
     num_fmt = workbook.add_format({"num_format": "#,##0.00"})
+    int_fmt = workbook.add_format({"num_format": "#,##0"})
 
-    for col_idx, col in enumerate(df.columns):
-        ws.write(0, col_idx, col, header_fmt)
-        max_len = len(col) if df.empty else max(len(col), int(df[col].astype(str).str.len().max()))
+    for col_num, value in enumerate(df.columns.values):
+        worksheet.write(0, col_num, value, header_fmt)
+
+    for idx, col in enumerate(df.columns):
+        max_len = len(col) if df.empty else max(len(col), int(df[col].astype(str).head(500).map(len).max()))
         width = min(max_len + 2, 40)
-        if col in {"Salariales", "Beneficios adicionales", "Importe total", "Importe", "Pagado CC", "Contabilizado PCP0", "Diferencia", "Importe total CC-nóminas", "Importe total Contabilización"}:
-            ws.set_column(col_idx, col_idx, max(width, 16), num_fmt)
+        if col in {"Salariales", "Beneficios adicionales", "Importe total", "Importe", "Diferencia", "Importe total CC-nóminas", "Importe total Contabilización"}:
+            worksheet.set_column(idx, idx, max(width, 16), num_fmt)
+        elif col in {"Cantidad"}:
+            worksheet.set_column(idx, idx, max(width, 12), int_fmt)
         else:
-            ws.set_column(col_idx, col_idx, width)
-    ws.freeze_panes(1, 0)
-    ws.autofilter(0, 0, max(len(df), 1), len(df.columns) - 1)
+            worksheet.set_column(idx, idx, width)
+    worksheet.freeze_panes(1, 0)
+    worksheet.autofilter(0, 0, max(len(df), 1), len(df.columns) - 1)
 
 
-def to_excel_bytes(named_sheets: Dict[str, pd.DataFrame]) -> bytes:
+def to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        for base_name, df in named_sheets.items():
+        for base_name, df in sheets.items():
             parts = chunk_dataframe(df)
             if len(parts) == 1:
-                write_sheet_with_format(writer, base_name[:31], parts[0])
+                sheet_name = base_name[:31]
+                parts[0].to_excel(writer, sheet_name=sheet_name, index=False)
+                format_excel_sheet(writer, sheet_name, parts[0])
             else:
                 for i, part in enumerate(parts, start=1):
-                    write_sheet_with_format(writer, f"{base_name}_{i}"[:31], part)
+                    sheet_name = f"{base_name}_{i}"[:31]
+                    part.to_excel(writer, sheet_name=sheet_name, index=False)
+                    format_excel_sheet(writer, sheet_name, part)
     output.seek(0)
     return output.getvalue()
 
@@ -669,348 +713,601 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 def build_zip_bytes(files: Dict[str, bytes]) -> bytes:
     output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name, data in files.items():
             zf.writestr(name, data)
     output.seek(0)
     return output.getvalue()
 
 
-def render_log(df_log: pd.DataFrame, title: str, key: str) -> None:
+def clean_generated_summary(df: pd.DataFrame) -> pd.DataFrame:
+    work = add_canonical_columns(df.copy())
+    work["Número de personal"] = work["Número de personal"].map(normalize_id)
+    if "Importe total" not in work.columns:
+        if {"Salariales", "Beneficios adicionales"}.issubset(work.columns):
+            work["Importe total"] = work["Salariales"].map(parse_number) + work["Beneficios adicionales"].map(parse_number)
+        elif "Importe" in work.columns:
+            work["Importe total"] = work["Importe"].map(parse_number)
+        else:
+            work["Importe total"] = 0.0
+    work["Importe total"] = work["Importe total"].map(parse_number)
+    if "Nombre del empleado o candidato" not in work.columns:
+        work["Nombre del empleado o candidato"] = ""
+    work = work[["Número de personal", "Nombre del empleado o candidato", "Importe total"]].copy()
+    work = work[work["Número de personal"].notna()].copy()
+    return work.groupby(["Número de personal", "Nombre del empleado o candidato"], dropna=False, as_index=False)["Importe total"].sum()
+
+
+def clean_generated_detail(df: pd.DataFrame) -> pd.DataFrame:
+    work = add_canonical_columns(df.copy())
+    for col in ["Número de personal", "CC-nómina", "Texto expl.CC-nómina"]:
+        if col not in work.columns:
+            work[col] = ""
+    work["Número de personal"] = work["Número de personal"].map(normalize_id)
+    work["CC-nómina"] = work["CC-nómina"].astype("string").fillna("").str.strip()
+    work["Texto expl.CC-nómina"] = work["Texto expl.CC-nómina"].astype("string").fillna("").str.strip()
+    if "Importe total" not in work.columns:
+        if {"Salariales", "Beneficios adicionales"}.issubset(work.columns):
+            work["Importe total"] = work["Salariales"].map(parse_number) + work["Beneficios adicionales"].map(parse_number)
+        elif "Importe" in work.columns:
+            work["Importe total"] = work["Importe"].map(parse_number)
+        else:
+            work["Importe total"] = 0.0
+    work["Importe total"] = work["Importe total"].map(parse_number)
+    work = work[work["Número de personal"].notna()].copy()
+    return work[["Número de personal", "CC-nómina", "Texto expl.CC-nómina", "Importe total"]]
+
+
+def summarize_from_detail(detail_df: pd.DataFrame) -> pd.DataFrame:
+    work = clean_generated_detail(detail_df)
+    summary = work.groupby(["Número de personal"], as_index=False)["Importe total"].sum()
+    summary["Nombre del empleado o candidato"] = ""
+    return summary[["Número de personal", "Nombre del empleado o candidato", "Importe total"]]
+
+
+def parse_generated_result(uploaded_file):
+    filename = uploaded_file.name
+    ext = Path(filename).suffix.lower()
+    data = uploaded_file.getvalue()
+
+    if ext in {".xlsx", ".xlsm", ".xls", ".xlsb"}:
+        engine = None
+        if ext == ".xlsb":
+            engine = "pyxlsb"
+        elif ext == ".xls":
+            engine = "xlrd"
+        xls = pd.ExcelFile(io.BytesIO(data), engine=engine)
+        resumen = None
+        detalle = None
+        for sheet in xls.sheet_names:
+            temp = pd.read_excel(io.BytesIO(data), sheet_name=sheet, engine=engine, dtype=object)
+            temp = add_canonical_columns(temp)
+            cols = set(temp.columns)
+            nsheet = normalize_text(sheet)
+            if nsheet == "resumen":
+                resumen = temp.copy()
+            elif nsheet == "detalle":
+                detalle = temp.copy()
+            elif {"Número de personal", "Importe total", "CC-nómina"}.issubset(cols) and detalle is None:
+                detalle = temp.copy()
+            elif {"Número de personal", "Importe total"}.issubset(cols) and resumen is None:
+                resumen = temp.copy()
+        if detalle is not None and resumen is None:
+            resumen = summarize_from_detail(detalle)
+        if resumen is None:
+            raise ValueError(f"No se pudo identificar una hoja resumen válida en {filename}")
+        if detalle is None:
+            detalle = pd.DataFrame(columns=["Número de personal", "CC-nómina", "Texto expl.CC-nómina", "Importe total"])
+        return clean_generated_summary(resumen), clean_generated_detail(detalle)
+
+    if ext in {".csv", ".txt"}:
+        df = add_canonical_columns(read_text_file(data, filename))
+        cols = set(df.columns)
+        if {"Número de personal", "Importe total", "CC-nómina"}.issubset(cols):
+            detalle = clean_generated_detail(df)
+            resumen = summarize_from_detail(detalle)
+            return resumen, detalle
+        if {"Número de personal", "Importe total"}.issubset(cols):
+            resumen = clean_generated_summary(df)
+            detalle = pd.DataFrame(columns=["Número de personal", "CC-nómina", "Texto expl.CC-nómina", "Importe total"])
+            return resumen, detalle
+        raise ValueError(f"El archivo {filename} no tiene las columnas necesarias para el comparativo.")
+
+    raise ValueError(f"Formato no soportado para comparativo: {filename}")
+
+
+def generate_comparative(cc_summary, cc_detail, contab_summary, contab_detail, tolerance=0.0):
+    cc_sum = clean_generated_summary(cc_summary).rename(columns={"Importe total": "Importe total CC-nóminas"})
+    contab_sum = clean_generated_summary(contab_summary).rename(columns={"Importe total": "Importe total Contabilización"})
+    resumen = cc_sum.merge(contab_sum[["Número de personal", "Importe total Contabilización"]], on="Número de personal", how="outer")
+    resumen["Nombre del empleado o candidato"] = resumen.get("Nombre del empleado o candidato", "").fillna("")
+    resumen["Importe total CC-nóminas"] = resumen["Importe total CC-nóminas"].fillna(0.0)
+    resumen["Importe total Contabilización"] = resumen["Importe total Contabilización"].fillna(0.0)
+    resumen["Diferencia"] = resumen["Importe total CC-nóminas"] - resumen["Importe total Contabilización"]
+    resumen = resumen.sort_values(["Número de personal", "Nombre del empleado o candidato"]).reset_index(drop=True)
+
+    cc_det = clean_generated_detail(cc_detail).rename(columns={"Importe total": "Importe total CC-nóminas"})
+    contab_det = clean_generated_detail(contab_detail).rename(columns={"Importe total": "Importe total Contabilización"})
+    detalle = cc_det.merge(contab_det, on=["Número de personal", "CC-nómina"], how="outer", suffixes=("_cc", "_contab"))
+    detalle["Texto expl.CC-nómina"] = detalle.get("Texto expl.CC-nómina_cc", "").fillna(detalle.get("Texto expl.CC-nómina_contab", ""))
+    detalle["Importe total CC-nóminas"] = detalle["Importe total CC-nóminas"].fillna(0.0)
+    detalle["Importe total Contabilización"] = detalle["Importe total Contabilización"].fillna(0.0)
+    detalle["Diferencia"] = detalle["Importe total CC-nóminas"] - detalle["Importe total Contabilización"]
+
+    saps = resumen.loc[resumen["Diferencia"].abs() > tolerance, "Número de personal"].tolist()
+    detalle = detalle[detalle["Número de personal"].isin(saps)].copy()
+    detalle = detalle[detalle["Diferencia"].abs() > tolerance].copy()
+    detalle = detalle[["Número de personal", "CC-nómina", "Texto expl.CC-nómina", "Importe total CC-nóminas", "Importe total Contabilización", "Diferencia"]].sort_values(["Número de personal", "CC-nómina"]).reset_index(drop=True)
+    return resumen, detalle
+
+
+def show_metrics(summary_df: pd.DataFrame, total_column: str, label_prefix: str):
+    c1, c2, c3 = st.columns(3)
+    c1.metric(f"{label_prefix} registros resumen", f"{len(summary_df):,}".replace(",", "."))
+    c2.metric(f"{label_prefix} SAP únicos", f"{summary_df['Número de personal'].nunique():,}".replace(",", "."))
+    c3.metric(f"{label_prefix} total importe", f"{summary_df[total_column].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+
+
+def render_log(df_log: pd.DataFrame, title: str, key_prefix: str):
     st.markdown(f"**{title}**")
     if df_log is None or df_log.empty:
-        st.info("Aún no hay registros.")
+        st.info("Aún no hay registros de lectura.")
         return
+    ok_count = int((df_log["estado"] == "OK").sum()) if "estado" in df_log.columns else 0
+    err_count = int((df_log["estado"] == "ERROR").sum()) if "estado" in df_log.columns else 0
     c1, c2 = st.columns(2)
-    c1.metric("OK", int((df_log["estado"] == "OK").sum()) if "estado" in df_log.columns else 0)
-    c2.metric("Con error", int((df_log["estado"] == "ERROR").sum()) if "estado" in df_log.columns else 0)
+    c1.success(f"Archivos leídos correctamente: {ok_count}")
+    c2.warning(f"Archivos con error: {err_count}")
     st.dataframe(df_log, width="stretch", height=220)
     st.download_button(
         f"Descargar log {title}",
         data=to_csv_bytes(df_log),
-        file_name=f"{key}.csv",
+        file_name=f"log_{key_prefix}.csv",
         mime="text/csv",
-        key=f"dl_{key}",
+        key=f"dl_log_{key_prefix}",
     )
 
 
-def show_metric_cards(df: pd.DataFrame, total_col: str, label: str) -> None:
-    c1, c2, c3 = st.columns(3)
-    c1.metric(f"{label} registros", f"{len(df):,}".replace(",", "."))
-    c2.metric(f"{label} SAP únicos", f"{df['Número de personal'].nunique():,}".replace(",", "."))
-    c3.metric(f"{label} total", f"{df[total_col].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+def get_year_options(df: pd.DataFrame) -> List[str]:
+    if "Fecha de pago_año" not in df.columns:
+        return []
+    vals = df["Fecha de pago_año"].astype("string").fillna("")
+    return sorted([x for x in vals.unique().tolist() if x])
 
 
-left, right = st.columns([1.2, 1], gap="large")
+def get_filter_options(df: pd.DataFrame, column: str) -> List[str]:
+    if column not in df.columns:
+        return []
+    vals = df[column].astype("string").fillna("").str.strip()
+    return sorted([x for x in vals.unique().tolist() if x])
 
-with left:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("1) Cargar CC-nóminas")
-    cc_files = st.file_uploader(
-        "Carga archivos de CC-nóminas / acumulados",
+
+def init_state():
+    defaults = {
+        "cc_raw": None,
+        "cc_log": pd.DataFrame(columns=["archivo", "estado", "registros", "columnas_detectadas", "detalle"]),
+        "cc_file_hash": None,
+        "cc_resumen": None,
+        "cc_detalle": None,
+        "contab_raw": None,
+        "contab_log": pd.DataFrame(columns=["archivo", "estado", "registros", "columnas_detectadas", "detalle"]),
+        "contab_file_hash": None,
+        "contab_resumen": None,
+        "contab_detalle": None,
+        "conceptos_df": None,
+        "conceptos_hash": None,
+        "comparativo_resumen": None,
+        "comparativo_detalle": None,
+        "cc_filter_years": [],
+        "cc_filter_dates": [],
+        "cc_filter_use_dates": False,
+        "cc_filter_periods": [],
+        "cc_filter_use_periods": False,
+        "contab_filter_periods_nomina": [],
+        "contab_filter_use_periods_nomina": False,
+        "contab_filter_periods_calc": [],
+        "contab_filter_use_periods_calc": False,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def apply_cc_filters(df: pd.DataFrame) -> pd.DataFrame:
+    work = df.copy()
+    years = st.session_state.get("cc_filter_years", [])
+    if years and "Fecha de pago_año" in work.columns:
+        work = work[work["Fecha de pago_año"].astype("string").isin(years)].copy()
+    if st.session_state.get("cc_filter_use_dates", False):
+        dates = st.session_state.get("cc_filter_dates", [])
+        if dates:
+            work = work[work["Fecha de pago_display"].astype("string").isin(dates)].copy()
+        else:
+            work = work.iloc[0:0].copy()
+    if st.session_state.get("cc_filter_use_periods", False):
+        periods = st.session_state.get("cc_filter_periods", [])
+        if periods:
+            work = work[work["Período para nómina"].astype("string").isin(periods)].copy()
+        else:
+            work = work.iloc[0:0].copy()
+    return work
+
+
+def apply_contab_filters(df: pd.DataFrame) -> pd.DataFrame:
+    work = df.copy()
+    if st.session_state.get("contab_filter_use_periods_nomina", False):
+        periods = st.session_state.get("contab_filter_periods_nomina", [])
+        if periods:
+            work = work[work["Período para nómina"].astype("string").isin(periods)].copy()
+        else:
+            work = work.iloc[0:0].copy()
+    if st.session_state.get("contab_filter_use_periods_calc", False):
+        periods = st.session_state.get("contab_filter_periods_calc", [])
+        if periods:
+            work = work[work["Período En cálc.nóm."].astype("string").isin(periods)].copy()
+        else:
+            work = work.iloc[0:0].copy()
+    return work
+
+
+init_state()
+
+with st.expander("Notas importantes", expanded=False):
+    st.markdown(
+        """
+        - La app intenta leer **TXT, CSV, XLS, XLSX, XLSB y ODS**.
+        - Si un archivo falla, queda registrado en el log y la app sigue con los demás.
+        - La app guarda en memoria solo las columnas necesarias para que sea más estable y rápida.
+        - Los filtros no recalculan el consolidado hasta que oprimas **Generar**.
+        - En **CC-nóminas**, el filtro principal es **Año de Fecha de pago** y luego **Fecha de pago**; después aparece **Período para nómina**.
+        - En **Contabilizaciones**, solo se filtra por **Período para nómina** y **Período En cálc.nóm.**.
+        - Si una hoja supera **1.048.576 filas**, el Excel se divide automáticamente en varias hojas.
+        """
+    )
+
+
+tab1, tab2, tab3 = st.tabs(["cc-nóminas", "Contabilizaciones", "comparativo"])
+
+with tab1:
+    st.subheader("1) Consolidación de CC-nóminas")
+    uploaded_cc_files = st.file_uploader(
+        "Carga uno o varios archivos de CC-nóminas / acumulados",
         type=["txt", "csv", "xls", "xlsx", "xlsb", "ods"],
         accept_multiple_files=True,
-        key="cc_files_uploader",
+        key="cc_files",
     )
 
-    if st.button("Leer CC-nóminas", type="primary", key="btn_read_cc"):
-        if not cc_files:
-            st.warning("Carga al menos un archivo de CC-nóminas.")
+    if st.button("Leer archivos CC-nóminas", type="primary", key="btn_load_cc"):
+        if not uploaded_cc_files:
+            st.warning("Primero carga uno o varios archivos.")
         else:
-            current_hash = get_uploads_hash(cc_files)
             try:
-                cc_raw, cc_log = combine_uploaded_files(cc_files, "CC-nóminas")
-                require_columns(
-                    cc_raw,
-                    ["Número de personal", "Nombre del empleado o candidato", "CC-nómina", "Importe", "Fecha de pago", "Período para nómina"],
-                    "CC-nóminas",
-                )
+                file_hash = hash_uploaded_files(uploaded_cc_files)
+                cc_raw, cc_log = combine_uploaded_files(uploaded_cc_files, "cc", "CC-nóminas")
                 st.session_state["cc_raw"] = cc_raw
                 st.session_state["cc_log"] = cc_log
-                st.session_state["cc_files_hash"] = current_hash
-                st.session_state["selected_year"] = None
-                st.session_state["selected_periods"] = []
-                st.success("CC-nóminas cargadas correctamente.")
+                st.session_state["cc_file_hash"] = file_hash
+                years = get_year_options(cc_raw)
+                st.session_state["cc_filter_years"] = years
+                st.session_state["cc_filter_dates"] = get_filter_options(cc_raw[cc_raw["Fecha de pago_año"].astype("string").isin(years)] if years else cc_raw, "Fecha de pago_display") if "Fecha de pago_display" in cc_raw.columns else []
+                st.session_state["cc_filter_periods"] = get_filter_options(cc_raw, "Período para nómina")
+                st.session_state["cc_filter_use_dates"] = False
+                st.session_state["cc_filter_use_periods"] = False
+                st.success("Archivos de CC-nóminas cargados correctamente.")
             except Exception as exc:
-                st.error(f"No fue posible cargar CC-nóminas: {exc}")
+                st.error(f"No fue posible procesar los archivos de CC-nóminas: {exc}")
 
     cc_raw = st.session_state.get("cc_raw")
+    cc_log = st.session_state.get("cc_log")
+    render_log(cc_log, "Log de lectura CC-nóminas", "cc")
+
     if isinstance(cc_raw, pd.DataFrame) and not cc_raw.empty:
-        years = get_available_years(cc_raw)
-        preview_cols = [c for c in ["__archivo_origen__", "__hoja_origen__", "Número de personal", "Nombre del empleado o candidato", "CC-nómina", "Importe", "Fecha de pago_display", "Período para nómina"] if c in cc_raw.columns]
-        preview = cc_raw[preview_cols].copy()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Registros cargados", f"{len(cc_raw):,}".replace(",", "."))
+        c2.metric("SAP detectados", f"{cc_raw['Número de personal'].nunique():,}".replace(",", "."))
+        c3.metric("Conceptos detectados", f"{cc_raw['CC-nómina'].nunique():,}".replace(",", "."))
+
+        preview = cc_raw[[c for c in ["__archivo_origen__", "__hoja_origen__", "Número de personal", "CC-nómina", "Importe", "Nombre del empleado o candidato", "Fecha de pago_display", "Período para nómina"] if c in cc_raw.columns]].head(100).copy()
         if "Fecha de pago_display" in preview.columns:
             preview = preview.rename(columns={"Fecha de pago_display": "Fecha de pago"})
+        st.markdown("**Vista previa de archivos cargados**")
+        st.dataframe(preview, width="stretch", height=280)
 
-        st.markdown("**Vista previa CC-nóminas**")
-        st.dataframe(preview.head(200), width="stretch", height=260)
+        st.markdown("### Filtros de consolidación")
+        st.markdown("<div class='soft-note'>Los filtros quedan guardados en memoria. El consolidado solo se recalcula cuando oprimes Generar.</div>", unsafe_allow_html=True)
 
-        with st.form("form_selection_cc"):
-            year_default = st.session_state["selected_year"] if st.session_state["selected_year"] in years else (years[0] if years else None)
-            selected_year = st.selectbox("Año según Fecha de pago", options=years, index=years.index(year_default) if year_default in years else 0)
-            period_options = get_periods_for_year(cc_raw, selected_year)
-            current_periods = [p for p in st.session_state.get("selected_periods", []) if p in period_options]
-            selected_periods = st.multiselect(
-                "Período para nómina",
-                options=period_options,
-                default=current_periods if current_periods else period_options,
-            )
-            apply_selection = st.form_submit_button("Guardar selección de año y períodos", type="primary")
+        year_options = get_year_options(cc_raw)
+        current_years = [x for x in st.session_state.get("cc_filter_years", year_options) if x in year_options]
+        temp_after_year = cc_raw[cc_raw["Fecha de pago_año"].astype("string").isin(current_years)].copy() if current_years else cc_raw.iloc[0:0].copy()
+        date_options = get_filter_options(temp_after_year, "Fecha de pago_display")
+        current_dates = [x for x in st.session_state.get("cc_filter_dates", date_options) if x in date_options]
+        temp_after_date = temp_after_year.copy()
+        if st.session_state.get("cc_filter_use_dates", False) and current_dates:
+            temp_after_date = temp_after_date[temp_after_date["Fecha de pago_display"].astype("string").isin(current_dates)].copy()
+        period_options = get_filter_options(temp_after_date, "Período para nómina")
+        current_periods = [x for x in st.session_state.get("cc_filter_periods", period_options) if x in period_options]
 
-        if apply_selection:
-            st.session_state["selected_year"] = selected_year
-            st.session_state["selected_periods"] = selected_periods
-            st.success("Selección guardada.")
+        with st.form("form_cc_filters"):
+            st.markdown("**Fecha de pago**")
+            selected_years = st.multiselect("Año", options=year_options, default=current_years)
+            use_dates = st.checkbox("Usar filtro para Fecha de pago", value=st.session_state.get("cc_filter_use_dates", False))
+            selected_dates = st.multiselect("Fechas disponibles", options=date_options, default=current_dates)
 
-        if st.session_state["selected_year"] is not None:
-            st.info(
-                f"Año seleccionado: {st.session_state['selected_year']} | "
-                f"Períodos seleccionados: {', '.join(st.session_state['selected_periods']) if st.session_state['selected_periods'] else 'Ninguno'}"
-            )
+            st.markdown("**Período para nómina**")
+            use_periods = st.checkbox("Usar filtro para Período para nómina", value=st.session_state.get("cc_filter_use_periods", False))
+            selected_periods = st.multiselect("Períodos disponibles", options=period_options, default=current_periods)
 
-    render_log(st.session_state.get("cc_log"), "Log CC-nóminas", "log_cc")
-    st.markdown("</div>", unsafe_allow_html=True)
+            apply_cc_filters_btn = st.form_submit_button("Aplicar filtros CC-nóminas", type="primary")
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("2) Cargar conceptos")
-    concept_file = st.file_uploader(
-        "Archivo de conceptos con columnas: CC-nómina, Texto expl.CC-nómina, Tipo",
-        type=["txt", "csv", "xls", "xlsx", "xlsb", "ods"],
-        accept_multiple_files=False,
-        key="concepts_uploader",
-    )
-    if st.button("Leer conceptos", key="btn_read_concepts"):
-        if concept_file is None:
-            st.warning("Carga el archivo de conceptos.")
-        else:
-            try:
-                concepts = load_concepts_from_upload(concept_file)
-                st.session_state["conceptos_df"] = concepts
-                st.session_state["conceptos_hash"] = get_upload_hash(concept_file)
-                st.success("Conceptos cargados correctamente.")
-            except Exception as exc:
-                st.error(f"No fue posible cargar conceptos: {exc}")
+            if apply_cc_filters_btn:
+                st.session_state["cc_filter_years"] = selected_years
+                st.session_state["cc_filter_use_dates"] = use_dates
+                st.session_state["cc_filter_dates"] = selected_dates if selected_dates else date_options
+                st.session_state["cc_filter_use_periods"] = use_periods
+                st.session_state["cc_filter_periods"] = selected_periods if selected_periods else period_options
+                st.success("Filtros actualizados")
 
-    concepts_df = st.session_state.get("conceptos_df")
-    if isinstance(concepts_df, pd.DataFrame) and not concepts_df.empty:
-        st.dataframe(concepts_df.head(200), width="stretch", height=220)
-        st.caption(f"Conceptos válidos cargados: {len(concepts_df):,}".replace(",", "."))
-    st.markdown("</div>", unsafe_allow_html=True)
+        cc_filtered = apply_cc_filters(cc_raw)
+        st.info(f"Registros después de filtros: {len(cc_filtered):,}".replace(",", "."))
 
-with right:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("3) Cargar PCP0 / contabilizaciones")
-    pcp0_files = st.file_uploader(
-        "Carga archivos PCP0",
+        employees_cc = cc_filtered[["Número de personal", "Nombre del empleado o candidato"]].dropna(subset=["Número de personal"]).drop_duplicates().sort_values(["Número de personal", "Nombre del empleado o candidato"]).head(200)
+        st.markdown("**SAP únicos detectados**")
+        st.dataframe(employees_cc, width="stretch", height=220)
+
+        concepts_template = create_concepts_template(cc_filtered if not cc_filtered.empty else cc_raw)
+        st.download_button(
+            "Descargar plantilla de conceptos",
+            data=to_excel_bytes({"Conceptos": concepts_template}),
+            file_name="plantilla_conceptos_cc_nominas.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_template_cc",
+        )
+
+        uploaded_concepts = st.file_uploader(
+            "Carga la base de conceptos diligenciada (CC-nómina, Texto expl.CC-nómina, Tipo)",
+            type=["txt", "csv", "xls", "xlsx", "xlsb", "ods"],
+            accept_multiple_files=False,
+            key="concepts_file_cc",
+        )
+        if uploaded_concepts is not None:
+            current_hash = hash_uploaded_file(uploaded_concepts)
+            if st.session_state.get("conceptos_hash") != current_hash:
+                try:
+                    st.session_state["conceptos_df"] = extract_concepts_from_upload(uploaded_concepts)
+                    st.session_state["conceptos_hash"] = current_hash
+                    st.success("Conceptos cargados en memoria.")
+                except Exception as exc:
+                    st.error(f"No fue posible leer el archivo de conceptos: {exc}")
+
+        concepts_df = st.session_state.get("conceptos_df")
+        if isinstance(concepts_df, pd.DataFrame) and not concepts_df.empty:
+            invalid_types = concepts_df[concepts_df["Tipo"].isna()].copy()
+            if not invalid_types.empty:
+                st.warning("Hay conceptos sin Tipo válido. Usa solamente: Salarial, Beneficio o No aplica.")
+                st.dataframe(invalid_types.head(100), width="stretch", height=180)
+
+            if st.button("Generar consolidado CC-nóminas", type="primary", key="btn_generate_cc"):
+                try:
+                    resumen_cc, detalle_cc, conceptos_cc = process_cc_nominas(cc_filtered, concepts_df)
+                    st.session_state["cc_resumen"] = resumen_cc
+                    st.session_state["cc_detalle"] = detalle_cc
+                    st.session_state["conceptos_df"] = conceptos_cc
+                    st.success("Consolidado de CC-nóminas generado.")
+                except Exception as exc:
+                    st.error(f"No fue posible generar el consolidado de CC-nóminas: {exc}")
+
+        if isinstance(st.session_state.get("cc_resumen"), pd.DataFrame):
+            resumen_cc = st.session_state["cc_resumen"]
+            detalle_cc = st.session_state["cc_detalle"]
+            conceptos_cc = st.session_state.get("conceptos_df", pd.DataFrame())
+            show_metrics(resumen_cc, "Importe total", "CC-nóminas")
+            st.markdown("**Resumen totalizado por empleado**")
+            st.dataframe(resumen_cc.head(300), width="stretch", height=300)
+            st.markdown("**Detalle por concepto**")
+            st.dataframe(detalle_cc.head(300), width="stretch", height=300)
+            excel_cc = to_excel_bytes({"Resumen": resumen_cc, "Detalle": detalle_cc, "Conceptos": conceptos_cc})
+            zip_cc = build_zip_bytes({
+                "cc_nominas_resultado.xlsx": excel_cc,
+                "cc_nominas_resumen.csv": to_csv_bytes(resumen_cc),
+                "cc_nominas_detalle.csv": to_csv_bytes(detalle_cc),
+                "conceptos_utilizados.csv": to_csv_bytes(conceptos_cc),
+                "log_cc_nominas.csv": to_csv_bytes(cc_log),
+            })
+            c1, c2 = st.columns(2)
+            c1.download_button("Descargar Excel CC-nóminas", data=excel_cc, file_name="cc_nominas_resultado.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            c2.download_button("Descargar ZIP CC-nóminas", data=zip_cc, file_name="cc_nominas_resultados.zip", mime="application/zip")
+
+with tab2:
+    st.subheader("2) Consolidación de Contabilizaciones / PCP0")
+    uploaded_contab_files = st.file_uploader(
+        "Carga uno o varios archivos de contabilización / PCP0",
         type=["txt", "csv", "xls", "xlsx", "xlsb", "ods"],
         accept_multiple_files=True,
-        key="pcp0_files_uploader",
+        key="contab_files",
     )
 
-    if st.button("Leer PCP0", type="primary", key="btn_read_pcp0"):
-        if not pcp0_files:
-            st.warning("Carga al menos un archivo de PCP0.")
-        else:
-            current_hash = get_uploads_hash(pcp0_files)
-            try:
-                pcp0_raw, pcp0_log = combine_uploaded_files(pcp0_files, "PCP0")
-                require_columns(
-                    pcp0_raw,
-                    ["Número de personal", "CC-nómina", "Importe"],
-                    "PCP0",
-                )
-                st.session_state["pcp0_raw"] = pcp0_raw
-                st.session_state["pcp0_log"] = pcp0_log
-                st.session_state["pcp0_files_hash"] = current_hash
-                st.success("PCP0 cargado correctamente.")
-            except Exception as exc:
-                st.error(f"No fue posible cargar PCP0: {exc}")
-
-    pcp0_raw = st.session_state.get("pcp0_raw")
-    if isinstance(pcp0_raw, pd.DataFrame) and not pcp0_raw.empty:
-        preview_cols = [c for c in ["__archivo_origen__", "__hoja_origen__", "Número de personal", "CC-nómina", "Importe", "Período para nómina", "Período En cálc.nóm."] if c in pcp0_raw.columns]
-        st.markdown("**Vista previa PCP0**")
-        st.dataframe(pcp0_raw[preview_cols].head(200), width="stretch", height=260)
-
-    render_log(st.session_state.get("pcp0_log"), "Log PCP0", "log_pcp0")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("4) Generar validación")
-    st.caption("La comparación usa: CC-nóminas = pagado | PCP0 = contabilizado")
-
-    if st.button("Procesar validación", type="primary", key="btn_process_all"):
-        cc_raw = st.session_state.get("cc_raw")
-        pcp0_raw = st.session_state.get("pcp0_raw")
-        concepts = st.session_state.get("conceptos_df")
-        year = st.session_state.get("selected_year")
-        periods = st.session_state.get("selected_periods", [])
-
-        if not isinstance(cc_raw, pd.DataFrame) or cc_raw.empty:
-            st.warning("Primero carga CC-nóminas.")
-        elif not isinstance(pcp0_raw, pd.DataFrame) or pcp0_raw.empty:
-            st.warning("Primero carga PCP0.")
-        elif not isinstance(concepts, pd.DataFrame) or concepts.empty:
-            st.warning("Primero carga conceptos.")
-        elif year is None:
-            st.warning("Primero selecciona el año.")
-        elif not periods:
-            st.warning("Selecciona al menos un Período para nómina.")
+    if st.button("Leer archivos Contabilizaciones", type="primary", key="btn_load_contab"):
+        if not uploaded_contab_files:
+            st.warning("Primero carga uno o varios archivos.")
         else:
             try:
-                progress = st.progress(0, text="Filtrando CC-nóminas...")
-                cc_filtered = filter_cc(cc_raw, year, periods)
-                progress.progress(0.2, text="Filtrando PCP0...")
-
-                pcp0_filtered = filter_pcp0(pcp0_raw, periods)
-                progress.progress(0.4, text="Procesando CC-nóminas...")
-
-                cc_resumen, cc_detalle = process_cc(cc_filtered, concepts)
-                progress.progress(0.6, text="Procesando PCP0...")
-
-                pcp0_resumen, pcp0_detalle = process_pcp0(pcp0_filtered, concepts)
-                progress.progress(0.8, text="Generando comparativos...")
-
-                comparativo_resumen, comparativo_detalle = compare_cc_vs_pcp0(
-                    cc_resumen, cc_detalle, pcp0_resumen, pcp0_detalle
-                )
-                comparativo_periodo = build_period_summary(cc_filtered, pcp0_filtered, concepts)
-
-                parametros_df = pd.DataFrame(
-                    {
-                        "Parametro": ["Año seleccionado", "Períodos seleccionados"],
-                        "Valor": [str(year), ", ".join(periods)],
-                    }
-                )
-
-                st.session_state["cc_resumen"] = cc_resumen
-                st.session_state["cc_detalle"] = cc_detalle
-                st.session_state["pcp0_resumen"] = pcp0_resumen
-                st.session_state["pcp0_detalle"] = pcp0_detalle
-                st.session_state["comparativo_resumen"] = comparativo_resumen
-                st.session_state["comparativo_detalle"] = comparativo_detalle
-                st.session_state["comparativo_periodo"] = comparativo_periodo
-                st.session_state["parametros_df"] = parametros_df
-
-                progress.progress(1.0, text="Proceso terminado")
-                progress.empty()
-                st.success("Validación generada correctamente.")
+                file_hash = hash_uploaded_files(uploaded_contab_files)
+                contab_raw, contab_log = combine_uploaded_files(uploaded_contab_files, "contab", "Contabilizaciones")
+                st.session_state["contab_raw"] = contab_raw
+                st.session_state["contab_log"] = contab_log
+                st.session_state["contab_file_hash"] = file_hash
+                st.session_state["contab_filter_periods_nomina"] = get_filter_options(contab_raw, "Período para nómina")
+                st.session_state["contab_filter_periods_calc"] = get_filter_options(contab_raw, "Período En cálc.nóm.")
+                st.session_state["contab_filter_use_periods_nomina"] = False
+                st.session_state["contab_filter_use_periods_calc"] = False
+                st.success("Archivos de contabilización cargados correctamente.")
             except Exception as exc:
-                st.error(f"No fue posible generar la validación: {exc}")
-    st.markdown("</div>", unsafe_allow_html=True)
+                st.error(f"No fue posible procesar los archivos de contabilización: {exc}")
 
-results_tabs = st.tabs(["Resumen", "Detalle", "Descargas"])
+    contab_raw = st.session_state.get("contab_raw")
+    contab_log = st.session_state.get("contab_log")
+    render_log(contab_log, "Log de lectura Contabilizaciones", "contab")
 
-with results_tabs[0]:
-    comp = st.session_state.get("comparativo_resumen")
-    cc_res = st.session_state.get("cc_resumen")
-    pcp0_res = st.session_state.get("pcp0_resumen")
-    comp_periodo = st.session_state.get("comparativo_periodo")
-
-    if isinstance(comp, pd.DataFrame):
+    if isinstance(contab_raw, pd.DataFrame) and not contab_raw.empty:
         c1, c2, c3 = st.columns(3)
-        c1.metric("SAP comparados", f"{comp['Número de personal'].nunique():,}".replace(",", "."))
-        c2.metric("SAP con diferencia", f"{(comp['Estado'] != 'OK').sum():,}".replace(",", "."))
-        c3.metric("Diferencia total", f"{comp['Diferencia'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        c1.metric("Registros cargados", f"{len(contab_raw):,}".replace(",", "."))
+        c2.metric("SAP detectados", f"{contab_raw['Número de personal'].nunique():,}".replace(",", "."))
+        c3.metric("Conceptos detectados", f"{contab_raw['CC-nómina'].nunique():,}".replace(",", "."))
 
-    if isinstance(cc_res, pd.DataFrame):
-        st.markdown("### Pagado en CC-nóminas")
-        show_metric_cards(cc_res, "Importe total", "CC")
-        st.dataframe(cc_res.head(300), width="stretch", height=280)
+        preview = contab_raw[[c for c in ["__archivo_origen__", "__hoja_origen__", "Número de personal", "CC-nómina", "Importe", "Período para nómina", "Período En cálc.nóm."] if c in contab_raw.columns]].head(100).copy()
+        st.markdown("**Vista previa de archivos cargados**")
+        st.dataframe(preview, width="stretch", height=280)
 
-    if isinstance(pcp0_res, pd.DataFrame):
-        st.markdown("### Contabilizado en PCP0")
-        show_metric_cards(pcp0_res, "Importe total", "PCP0")
-        st.dataframe(pcp0_res.head(300), width="stretch", height=280)
+        st.markdown("### Filtros de consolidación")
+        st.markdown("<div class='soft-note'>En contabilizaciones solo se muestran los filtros que realmente aplican: Período para nómina y Período En cálc.nóm.</div>", unsafe_allow_html=True)
 
-    if isinstance(comp, pd.DataFrame):
-        st.markdown("### Comparativo por empleado")
-        st.dataframe(comp.head(300), width="stretch", height=320)
+        period_nom_options = get_filter_options(contab_raw, "Período para nómina")
+        current_period_nom = [x for x in st.session_state.get("contab_filter_periods_nomina", period_nom_options) if x in period_nom_options]
+        temp_after_nom = contab_raw.copy()
+        if st.session_state.get("contab_filter_use_periods_nomina", False) and current_period_nom:
+            temp_after_nom = temp_after_nom[temp_after_nom["Período para nómina"].astype("string").isin(current_period_nom)].copy()
+        calc_options = get_filter_options(temp_after_nom, "Período En cálc.nóm.")
+        current_calc = [x for x in st.session_state.get("contab_filter_periods_calc", calc_options) if x in calc_options]
 
-    if isinstance(comp_periodo, pd.DataFrame):
-        st.markdown("### Comparativo por período")
-        st.dataframe(comp_periodo.head(300), width="stretch", height=280)
+        with st.form("form_contab_filters"):
+            use_nom = st.checkbox("Usar filtro para Período para nómina", value=st.session_state.get("contab_filter_use_periods_nomina", False))
+            selected_nom = st.multiselect("Período para nómina", options=period_nom_options, default=current_period_nom)
+            use_calc = st.checkbox("Usar filtro para Período En cálc.nóm.", value=st.session_state.get("contab_filter_use_periods_calc", False))
+            selected_calc = st.multiselect("Período En cálc.nóm.", options=calc_options, default=current_calc)
+            apply_contab_filters_btn = st.form_submit_button("Aplicar filtros Contabilizaciones", type="primary")
+            if apply_contab_filters_btn:
+                st.session_state["contab_filter_use_periods_nomina"] = use_nom
+                st.session_state["contab_filter_periods_nomina"] = selected_nom if selected_nom else period_nom_options
+                st.session_state["contab_filter_use_periods_calc"] = use_calc
+                st.session_state["contab_filter_periods_calc"] = selected_calc if selected_calc else calc_options
+                st.success("Filtros actualizados")
 
-with results_tabs[1]:
-    cc_det = st.session_state.get("cc_detalle")
-    pcp0_det = st.session_state.get("pcp0_detalle")
-    comp_det = st.session_state.get("comparativo_detalle")
+        contab_filtered = apply_contab_filters(contab_raw)
+        st.info(f"Registros después de filtros: {len(contab_filtered):,}".replace(",", "."))
+        employees_contab = contab_filtered[["Número de personal"]].dropna(subset=["Número de personal"]).drop_duplicates().sort_values(["Número de personal"]).head(200)
+        st.markdown("**SAP únicos detectados**")
+        st.dataframe(employees_contab, width="stretch", height=220)
 
-    if isinstance(cc_det, pd.DataFrame):
-        st.markdown("### Detalle CC-nóminas")
-        st.dataframe(cc_det.head(300), width="stretch", height=300)
-
-    if isinstance(pcp0_det, pd.DataFrame):
-        st.markdown("### Detalle PCP0")
-        st.dataframe(pcp0_det.head(300), width="stretch", height=300)
-
-    if isinstance(comp_det, pd.DataFrame):
-        st.markdown("### Detalle de diferencias")
-        st.dataframe(comp_det.head(300), width="stretch", height=320)
-
-with results_tabs[2]:
-    cc_res = st.session_state.get("cc_resumen")
-    cc_det = st.session_state.get("cc_detalle")
-    pcp0_res = st.session_state.get("pcp0_resumen")
-    pcp0_det = st.session_state.get("pcp0_detalle")
-    comp = st.session_state.get("comparativo_resumen")
-    comp_det = st.session_state.get("comparativo_detalle")
-    comp_periodo = st.session_state.get("comparativo_periodo")
-    params = st.session_state.get("parametros_df")
-    concepts = st.session_state.get("conceptos_df")
-    cc_log = st.session_state.get("cc_log")
-    pcp0_log = st.session_state.get("pcp0_log")
-
-    if all(isinstance(x, pd.DataFrame) for x in [cc_res, cc_det, pcp0_res, pcp0_det, comp, comp_det, comp_periodo, params, concepts]):
-        excel_bytes = to_excel_bytes(
-            {
-                "Parametros": params,
-                "Pagado_CC": cc_res,
-                "Detalle_CC": cc_det,
-                "Contabilizado_PCP0": pcp0_res,
-                "Detalle_PCP0": pcp0_det,
-                "Comparativo_Empleado": comp,
-                "Detalle_Diferencias": comp_det,
-                "Comparativo_Periodo": comp_periodo,
-                "Conceptos_Utilizados": concepts,
-                "Log_CC": cc_log if isinstance(cc_log, pd.DataFrame) else pd.DataFrame(),
-                "Log_PCP0": pcp0_log if isinstance(pcp0_log, pd.DataFrame) else pd.DataFrame(),
-            }
+        st.info("Se usarán los conceptos cargados previamente en CC-nóminas. Si quieres, puedes reemplazarlos abajo.")
+        uploaded_concepts_contab = st.file_uploader(
+            "Opcional: carga nuevamente el archivo de conceptos para reemplazar el anterior",
+            type=["txt", "csv", "xls", "xlsx", "xlsb", "ods"],
+            accept_multiple_files=False,
+            key="concepts_file_contab",
         )
+        if uploaded_concepts_contab is not None:
+            current_hash = hash_uploaded_file(uploaded_concepts_contab)
+            if st.session_state.get("conceptos_hash") != current_hash:
+                try:
+                    st.session_state["conceptos_df"] = extract_concepts_from_upload(uploaded_concepts_contab)
+                    st.session_state["conceptos_hash"] = current_hash
+                    st.success("Conceptos actualizados en memoria.")
+                except Exception as exc:
+                    st.error(f"No fue posible leer el archivo de conceptos: {exc}")
 
-        zip_bytes = build_zip_bytes(
-            {
-                "resultado_medios_magneticos.xlsx": excel_bytes,
-                "parametros.csv": to_csv_bytes(params),
-                "pagado_cc.csv": to_csv_bytes(cc_res),
-                "detalle_cc.csv": to_csv_bytes(cc_det),
-                "contabilizado_pcp0.csv": to_csv_bytes(pcp0_res),
-                "detalle_pcp0.csv": to_csv_bytes(pcp0_det),
-                "comparativo_empleado.csv": to_csv_bytes(comp),
-                "detalle_diferencias.csv": to_csv_bytes(comp_det),
-                "comparativo_periodo.csv": to_csv_bytes(comp_periodo),
-                "conceptos_utilizados.csv": to_csv_bytes(concepts),
-                "log_cc.csv": to_csv_bytes(cc_log if isinstance(cc_log, pd.DataFrame) else pd.DataFrame()),
-                "log_pcp0.csv": to_csv_bytes(pcp0_log if isinstance(pcp0_log, pd.DataFrame) else pd.DataFrame()),
-            }
-        )
+        concepts_df = st.session_state.get("conceptos_df")
+        if not isinstance(concepts_df, pd.DataFrame) or concepts_df.empty:
+            st.warning("Primero carga y clasifica los conceptos en la pestaña CC-nóminas o súbelos aquí.")
+        else:
+            invalid_types = concepts_df[concepts_df["Tipo"].isna()].copy()
+            if not invalid_types.empty:
+                st.warning("Hay conceptos sin Tipo válido. Usa solamente: Salarial, Beneficio o No aplica.")
+                st.dataframe(invalid_types.head(100), width="stretch", height=180)
 
+            if st.button("Generar consolidado Contabilizaciones", type="primary", key="btn_generate_contab"):
+                try:
+                    resumen_contab, detalle_contab, conceptos_contab = process_contabilizaciones(contab_filtered, concepts_df)
+                    st.session_state["contab_resumen"] = resumen_contab
+                    st.session_state["contab_detalle"] = detalle_contab
+                    st.session_state["conceptos_df"] = conceptos_contab
+                    st.success("Consolidado de contabilizaciones generado.")
+                except Exception as exc:
+                    st.error(f"No fue posible generar el consolidado de contabilizaciones: {exc}")
+
+        if isinstance(st.session_state.get("contab_resumen"), pd.DataFrame):
+            resumen_contab = st.session_state["contab_resumen"]
+            detalle_contab = st.session_state["contab_detalle"]
+            conceptos_contab = st.session_state.get("conceptos_df", pd.DataFrame())
+            show_metrics(resumen_contab, "Importe total", "Contabilización")
+            st.markdown("**Resumen totalizado por SAP**")
+            st.dataframe(resumen_contab.head(300), width="stretch", height=300)
+            st.markdown("**Detalle por concepto**")
+            st.dataframe(detalle_contab.head(300), width="stretch", height=300)
+            excel_contab = to_excel_bytes({"Resumen": resumen_contab, "Detalle": detalle_contab, "Conceptos": conceptos_contab})
+            zip_contab = build_zip_bytes({
+                "contabilizaciones_resultado.xlsx": excel_contab,
+                "contabilizaciones_resumen.csv": to_csv_bytes(resumen_contab),
+                "contabilizaciones_detalle.csv": to_csv_bytes(detalle_contab),
+                "conceptos_utilizados.csv": to_csv_bytes(conceptos_contab),
+                "log_contabilizaciones.csv": to_csv_bytes(contab_log),
+            })
+            c1, c2 = st.columns(2)
+            c1.download_button("Descargar Excel Contabilizaciones", data=excel_contab, file_name="contabilizaciones_resultado.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            c2.download_button("Descargar ZIP Contabilizaciones", data=zip_contab, file_name="contabilizaciones_resultados.zip", mime="application/zip")
+
+with tab3:
+    st.subheader("3) Comparativo")
+    st.markdown("Compara **Número de personal + Importe total** entre CC-nóminas y Contabilización, y genera el detalle de diferencias por concepto.")
+    tolerance = st.number_input("Tolerancia para considerar diferencia (0 = exacto)", min_value=0.0, value=0.0, step=0.01, key="tolerance_compare")
+
+    can_compare_session = all(isinstance(st.session_state.get(k), pd.DataFrame) for k in ["cc_resumen", "cc_detalle", "contab_resumen", "contab_detalle"])
+    if can_compare_session:
+        st.success("Hay resultados en memoria de las pestañas anteriores.")
+        if st.button("Generar comparativo con los datos ya procesados", type="primary", key="btn_compare_session"):
+            try:
+                resumen_comp, detalle_comp = generate_comparative(
+                    st.session_state["cc_resumen"],
+                    st.session_state["cc_detalle"],
+                    st.session_state["contab_resumen"],
+                    st.session_state["contab_detalle"],
+                    tolerance=tolerance,
+                )
+                st.session_state["comparativo_resumen"] = resumen_comp
+                st.session_state["comparativo_detalle"] = detalle_comp
+                st.success("Comparativo generado con resultados en memoria.")
+            except Exception as exc:
+                st.error(f"No fue posible generar el comparativo: {exc}")
+
+    st.markdown("**O, si prefieres, vuelve a cargar los archivos generados**")
+    c1, c2 = st.columns(2)
+    with c1:
+        compare_cc_file = st.file_uploader("Archivo resultado de CC-nóminas (Excel, CSV o TXT)", type=["txt", "csv", "xls", "xlsx", "xlsb"], accept_multiple_files=False, key="compare_cc_file")
+    with c2:
+        compare_contab_file = st.file_uploader("Archivo resultado de Contabilizaciones (Excel, CSV o TXT)", type=["txt", "csv", "xls", "xlsx", "xlsb"], accept_multiple_files=False, key="compare_contab_file")
+
+    if st.button("Generar comparativo con archivos cargados", key="btn_compare_upload"):
+        if compare_cc_file is None or compare_contab_file is None:
+            st.warning("Carga ambos archivos resultado para generar el comparativo por esta vía.")
+        else:
+            try:
+                cc_summary_file, cc_detail_file = parse_generated_result(compare_cc_file)
+                contab_summary_file, contab_detail_file = parse_generated_result(compare_contab_file)
+                resumen_comp, detalle_comp = generate_comparative(cc_summary_file, cc_detail_file, contab_summary_file, contab_detail_file, tolerance=tolerance)
+                st.session_state["comparativo_resumen"] = resumen_comp
+                st.session_state["comparativo_detalle"] = detalle_comp
+                st.success("Comparativo generado con archivos cargados.")
+            except Exception as exc:
+                st.error(f"No fue posible generar el comparativo con archivos cargados: {exc}")
+
+    if isinstance(st.session_state.get("comparativo_resumen"), pd.DataFrame):
+        resumen_comp = st.session_state["comparativo_resumen"]
+        detalle_comp = st.session_state["comparativo_detalle"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("SAP comparados", f"{resumen_comp['Número de personal'].nunique():,}".replace(",", "."))
+        c2.metric("SAP con diferencia", f"{(resumen_comp['Diferencia'].abs() > tolerance).sum():,}".replace(",", "."))
+        c3.metric("Diferencia total", f"{resumen_comp['Diferencia'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        st.markdown("**Resumen comparativo**")
+        st.dataframe(resumen_comp.head(300), width="stretch", height=320)
+        st.markdown("**Detalle de diferencias por CC-nómina**")
+        st.dataframe(detalle_comp.head(300), width="stretch", height=320)
+        excel_compare = to_excel_bytes({"Resumen_Comparativo": resumen_comp, "Detalle_Diferencias": detalle_comp})
+        zip_compare = build_zip_bytes({
+            "comparativo_resultado.xlsx": excel_compare,
+            "comparativo_resumen.csv": to_csv_bytes(resumen_comp),
+            "comparativo_detalle.csv": to_csv_bytes(detalle_comp),
+        })
         c1, c2 = st.columns(2)
-        c1.download_button(
-            "Descargar Excel",
-            data=excel_bytes,
-            file_name="resultado_medios_magneticos.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="dl_excel_final",
-        )
-        c2.download_button(
-            "Descargar ZIP",
-            data=zip_bytes,
-            file_name="resultado_medios_magneticos.zip",
-            mime="application/zip",
-            key="dl_zip_final",
-        )
-    else:
-        st.info("Cuando proceses la validación, aquí aparecerán las descargas.")
+        c1.download_button("Descargar Excel Comparativo", data=excel_compare, file_name="comparativo_resultado.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        c2.download_button("Descargar ZIP Comparativo", data=zip_compare, file_name="comparativo_resultados.zip", mime="application/zip")
 
-st.markdown('<div class="footer-credit">Creado por Andrés Huérfano Dávila - Nómina JMC</div>', unsafe_allow_html=True)
+st.markdown("<div class='footer-credit'>Creado por Andrés Huérfano Dávila - Nómina JMC</div>", unsafe_allow_html=True)
